@@ -48,10 +48,6 @@ async function getNextActivity () {
       return { text: `${totalUsers} users`, type: 'LISTENING' }
     case 3:
       return { text: '!verify', type: 'LISTENING' }
-      case 4:
-        return { text: 'SkyBlox Systems', type: 'LISTENING' }
-        case 5:
-          return { text: 'Rover API', type: 'LISTENING' }
   }
 }
 
