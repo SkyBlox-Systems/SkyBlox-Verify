@@ -21,6 +21,7 @@ class DiscordBot {
     this.servers = {}
     this.authorizedOwners = []
     this.patronTransfers = {}
+    this.blacklist = {}
   }
 
   /**
@@ -59,12 +60,33 @@ class DiscordBot {
     // the class and not the event.
     this.bot.on('ready', this.ready.bind(this))
     this.bot.on('guildMemberAdd', this.guildMemberAdd.bind(this))
-    if (config.loud) this.bot.on('error', (message) => console.log(message))
+
+    this.bot.on('invalidated', () => { // This should never happen!
+      console.error(`Sesson on shard ${this.bot.shard.ids[0]} invalidated - exiting!`)
+      process.exit(0)
+    })
+    if (config.loud) {
+      this.bot.on('error', (message) => console.log(message))
+      process.on('unhandledRejection', (reason, promise) => {
+        console.log('Unhandled rejection at:', promise, 'reason:', reason)
+      })
+    }
 
     // Only hook up if lockNicknames mode is enabled.
     if (config.lockNicknames) {
       this.bot.on('message', this.message.bind(this))
     }
+
+    this.bot.dispatcher.addInhibitor(msg => {
+      if (!msg.guild) {
+        return
+      }
+
+      if (this.blacklist[msg.guild.ownerID]) {
+        msg.reply("This server is blacklisted!")
+        return 'blacklisted'
+      }
+    })
 
     if (this.isPremium()) {
       this.bot.dispatcher.addInhibitor(msg => {
@@ -107,10 +129,29 @@ class DiscordBot {
 
     // Login.
     this.bot.login(process.env.CLIENT_TOKEN)
+
+    this.updateBlacklist().catch(console.error)
   }
 
   isPremium () {
     return !!config.patreonAccessToken
+  }
+
+  async updateBlacklist () {
+    if (!config.banServer) {
+      return false
+    }
+
+    const response = await request(`https://discord.com/api/v6/guilds/${config.banServer}/bans`, {
+      json: true,
+      headers: {
+        Authorization: `Bot ${config.token}`
+      }
+    })
+
+    response.forEach(ban => {
+      this.blacklist[ban.user.id] = true
+    })
   }
 
   async updatePatrons (page, newAuthorizedOwners) {
@@ -173,7 +214,7 @@ class DiscordBot {
    * @memberof DiscordBot
    */
   ready () {
-    console.log(`Shard ${this.bot.shard.ids[0]} is ready, serving ${this.bot.guilds.array().length} guilds.`)
+    console.log(`Shard ${this.bot.shard.ids[0]} is ready, serving ${this.bot.guilds.cache.array().length} guilds.`)
 
     // Set status message to the default until we get info from master process
     this.setActivity()
@@ -202,7 +243,7 @@ class DiscordBot {
     if (!member) return
 
     // If this is the verify channel, we want to delete the message and just verify the user if they aren't an admin.
-    if (server.getSetting('verifyChannel') === message.channel.id && message.cleanContent.toLowerCase() !== message.guild.commandPrefix + 'verify' && !(this.bot.isOwner(message.author) || message.member.hasPermission('MANAGE_GUILD') || message.member.roles.find(role => role.name === 'RoVer Admin'))) {
+    if (server.getSetting('verifyChannel') === message.channel.id && message.cleanContent.toLowerCase() !== message.guild.commandPrefix + 'verify' && !(this.bot.isOwner(message.author) || message.member.hasPermission('MANAGE_GUILD') || message.member.roles.cache.find(role => role.name === 'RoVer Admin'))) {
       if (message.channel.permissionsFor(message.guild.me).has('MANAGE_MESSAGES')) {
         message.delete().catch(console.error)
       }
@@ -297,7 +338,7 @@ class DiscordBot {
       try {
         if (!this.bot.guilds.has(guildId)) continue
 
-        const guild = this.bot.guilds.get(guildId)
+        const guild = this.bot.guilds.resolve(guildId)
         const server = await this.getServer(guild.id)
 
         const member = await server.getMember(id)
@@ -315,7 +356,7 @@ class DiscordBot {
           // It worked, checking if there's a custom welcome message.
           await this.bot.users.fetch(id)
 
-          const guildMember = await this.bot.guilds.get(guild.id).members.fetch(id)
+          const guildMember = await this.bot.guilds.resolve(guild.id).members.fetch(id)
           guildMember.send(server.getWelcomeMessage(action, guildMember)).catch(() => {})
         }
 
